@@ -46,6 +46,7 @@ class GenRequest(BaseModel):
     text: str
     speaker: str = "ryan"
     language: str = "English"
+    engine: str = "megakernel"  # "megakernel" (streams) or "stock" (full-then-play)
 
 
 def get_engine():
@@ -66,6 +67,23 @@ def save_wav(path: str, pcm16: bytes, sr: int):
         w.writeframes(pcm16)
 
 
+def save_meta(wav_path: str, *, text: str, speaker: str, language: str,
+              engine_name: str, gen_seconds: float, audio_seconds: float,
+              ttfa_ms: float | None):
+    meta = {
+        "text": text,
+        "speaker": speaker,
+        "language": language,
+        "engine": engine_name,
+        "gen_seconds": round(gen_seconds, 3),
+        "audio_seconds": round(audio_seconds, 3),
+        "rtf": round(gen_seconds / audio_seconds, 3) if audio_seconds > 0 else None,
+        "ttfa_ms": round(ttfa_ms, 1) if ttfa_ms is not None else None,
+    }
+    with open(wav_path.removesuffix(".wav") + ".json", "w") as f:
+        json.dump(meta, f)
+
+
 @app.post("/generate")
 def generate(req: GenRequest):
     eng = get_engine()
@@ -73,26 +91,61 @@ def generate(req: GenRequest):
     if not text:
         raise HTTPException(400, "empty text")
 
+    engine_name = req.engine if req.engine in ("megakernel", "stock") else "megakernel"
     slug = re.sub(r"[^a-zA-Z0-9]+", "_", text[:40]).strip("_") or "voice"
     stamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
-    fname = f"{stamp}_{req.speaker}_{slug}.wav"
+    fname = f"{stamp}_{engine_name}_{req.speaker}_{slug}.wav"
     fpath = os.path.join(VOICES_DIR, fname)
 
-    def pcm_stream():
+    import time as _time
+
+    def pcm_stream_megakernel():
         all_pcm = []
+        t0 = _time.perf_counter()
+        ttfa = None
         with engine_lock, torch.inference_mode():
             for audio, sr, _ in eng.stream(text, speaker=req.speaker,
                                            language=req.language):
+                if ttfa is None:
+                    ttfa = (_time.perf_counter() - t0) * 1000
                 pcm = (np.clip(audio, -1, 1) * 32767).astype("<i2").tobytes()
                 all_pcm.append(pcm)
                 yield pcm
-        save_wav(fpath, b"".join(all_pcm), eng.sample_rate)
+        gen_s = _time.perf_counter() - t0
+        blob = b"".join(all_pcm)
+        save_wav(fpath, blob, eng.sample_rate)
+        save_meta(fpath, text=text, speaker=req.speaker, language=req.language,
+                  engine_name="megakernel", gen_seconds=gen_s,
+                  audio_seconds=len(blob) / 2 / eng.sample_rate, ttfa_ms=ttfa)
 
+    def pcm_stream_stock():
+        # The base model has no streaming decode: generate everything, then
+        # send the PCM in one piece (the UI will note this).
+        t0 = _time.perf_counter()
+        with engine_lock, torch.inference_mode():
+            wavs, sr = eng.base.generate_custom_voice(
+                text=text, speaker=req.speaker, language=req.language)
+            torch.cuda.synchronize()
+        gen_s = _time.perf_counter() - t0
+        audio = wavs[0]
+        if torch.is_tensor(audio):
+            audio = audio.flatten().float().cpu().numpy()
+        else:
+            audio = np.asarray(audio).flatten()
+        blob = (np.clip(audio, -1, 1) * 32767).astype("<i2").tobytes()
+        save_wav(fpath, blob, sr)
+        save_meta(fpath, text=text, speaker=req.speaker, language=req.language,
+                  engine_name="stock", gen_seconds=gen_s,
+                  audio_seconds=len(audio) / sr, ttfa_ms=gen_s * 1000)
+        yield blob
+
+    gen = pcm_stream_megakernel if engine_name == "megakernel" else pcm_stream_stock
     return StreamingResponse(
-        pcm_stream(),
+        gen(),
         media_type="application/octet-stream",
         headers={"X-Sample-Rate": str(get_engine().sample_rate),
-                 "X-Filename": fname},
+                 "X-Filename": fname,
+                 "X-Engine": engine_name},
     )
 
 
@@ -102,9 +155,17 @@ def list_voices():
     for f in sorted(os.listdir(VOICES_DIR), reverse=True):
         if f.endswith(".wav"):
             st = os.stat(os.path.join(VOICES_DIR, f))
-            files.append({"name": f, "size": st.st_size,
-                          "mtime": datetime.datetime.fromtimestamp(st.st_mtime)
-                          .strftime("%Y-%m-%d %H:%M:%S")})
+            entry = {"name": f, "size": st.st_size,
+                     "mtime": datetime.datetime.fromtimestamp(st.st_mtime)
+                     .strftime("%Y-%m-%d %H:%M:%S")}
+            meta_path = os.path.join(VOICES_DIR, f.removesuffix(".wav") + ".json")
+            if os.path.isfile(meta_path):
+                try:
+                    with open(meta_path) as mf:
+                        entry["meta"] = json.load(mf)
+                except (OSError, json.JSONDecodeError):
+                    pass
+            files.append(entry)
     return files
 
 
@@ -143,33 +204,47 @@ HTML = """<!doctype html>
   <option>Portuguese</option><option>Spanish</option><option>Japanese</option><option>Korean</option>
   <option>French</option><option>Russian</option>
  </select>
- <button id="go">Generate &amp; stream</button>
+ <select id="engine">
+  <option value="megakernel">megakernel (streams live)</option>
+  <option value="stock">base model (no streaming)</option>
+ </select>
+ <button id="go">Generate</button>
 </div>
 <div id="status"></div>
 <h2 style="font-size:1.1rem">Voice library</h2>
 <div id="player"></div>
-<table><thead><tr><th>file</th><th>time</th><th>size</th><th></th></tr></thead>
+<table><thead><tr><th>file</th><th>engine</th><th>audio</th><th>gen time</th><th>RTF</th><th>created</th><th></th></tr></thead>
 <tbody id="lib"></tbody></table>
 <script>
 const $=id=>document.getElementById(id);
 let ctx;
 async function refreshLib(){
   const r=await fetch('/voices'); const files=await r.json();
-  $('lib').innerHTML=files.map(f=>
-    `<tr><td>${f.name}</td><td>${f.mtime}</td><td>${(f.size/1024).toFixed(0)} kB</td>
-     <td><button class="play" onclick="playFile('${f.name}')">▶ play</button></td></tr>`).join('');
+  $('lib').innerHTML=files.map(f=>{
+    const m=f.meta||{};
+    const eng=m.engine||'?';
+    const gen=m.gen_seconds!=null?m.gen_seconds.toFixed(2)+'s':'—';
+    const rtf=m.rtf!=null?m.rtf.toFixed(2):'—';
+    const dur=m.audio_seconds!=null?m.audio_seconds.toFixed(1)+'s':'—';
+    return `<tr><td title="${(m.text||'').replace(/"/g,'&quot;')}">${f.name}</td>
+     <td>${eng}</td><td>${dur}</td><td>${gen}</td><td>${rtf}</td><td>${f.mtime}</td>
+     <td><button class="play" onclick="playFile('${f.name}')">▶ play</button></td></tr>`;
+  }).join('');
 }
 function playFile(name){
   $('player').innerHTML=`<audio controls autoplay src="/voices/${encodeURIComponent(name)}"></audio>`;
 }
 $('go').onclick=async()=>{
   const btn=$('go'); btn.disabled=true;
-  $('status').textContent='generating…';
+  const engine=$('engine').value;
+  $('status').textContent=engine==='stock'
+    ? 'generating with base model (no streaming — audio plays when fully done)…'
+    : 'generating…';
   ctx = ctx || new (window.AudioContext||window.webkitAudioContext)();
   await ctx.resume();
   const t0=performance.now();
   const resp=await fetch('/generate',{method:'POST',headers:{'Content-Type':'application/json'},
-    body:JSON.stringify({text:$('text').value,speaker:$('speaker').value,language:$('language').value})});
+    body:JSON.stringify({text:$('text').value,speaker:$('speaker').value,language:$('language').value,engine})});
   if(!resp.ok){$('status').textContent='error: '+await resp.text();btn.disabled=false;return;}
   const sr=parseInt(resp.headers.get('X-Sample-Rate')||'24000');
   const reader=resp.body.getReader();
@@ -177,7 +252,7 @@ $('go').onclick=async()=>{
   while(true){
     const {done,value}=await reader.read();
     if(done)break;
-    if(first){$('status').textContent=`first audio after ${(performance.now()-t0).toFixed(0)} ms — playing live…`;first=false;}
+    if(first){$('status').textContent=`first audio after ${((performance.now()-t0)/1000).toFixed(2)} s — playing…`;first=false;}
     let bytes=new Uint8Array(leftover.length+value.length);
     bytes.set(leftover); bytes.set(value,leftover.length);
     const usable=bytes.length-(bytes.length%2);

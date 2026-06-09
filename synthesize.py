@@ -6,13 +6,14 @@ Usage:
 """
 
 import argparse
+import os
 import sys
 import time
 
 import soundfile as sf
 import torch
 
-sys.path.insert(0, "/root/qwen_tts_megakernel")
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from qwen_tts_megakernel.engine import MegakernelTTS
 
 

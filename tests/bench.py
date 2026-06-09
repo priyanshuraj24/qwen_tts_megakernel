@@ -1,12 +1,13 @@
 """Benchmarks: raw talker megakernel tok/s, per-component step costs, TTFC, RTF."""
 
+import os
 import sys
 import time
 
 import numpy as np
 import torch
 
-sys.path.insert(0, "/root/qwen_tts_megakernel")
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from qwen_tts_megakernel.engine import MegakernelTTS
 
 TEXT = ("The quick brown fox jumps over the lazy dog while the persistent "

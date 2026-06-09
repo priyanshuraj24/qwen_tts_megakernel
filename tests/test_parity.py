@@ -5,11 +5,12 @@ both the HF inner talker model (DynamicCache, sdpa) and the megakernel,
 comparing post-final-norm hidden states and codec-head logits per step.
 """
 
+import os
 import sys
 
 import torch
 
-sys.path.insert(0, "/root/qwen_tts_megakernel")
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from qwen_tts_megakernel.engine import MegakernelTTS
 

@@ -4,6 +4,7 @@ Same model weights, same text, same speaker. The stock path is the official
 Qwen3TTSModel.generate_custom_voice (HF generate loop, dynamic cache, sdpa).
 """
 
+import os
 import sys
 import time
 
@@ -11,7 +12,7 @@ import numpy as np
 import soundfile as sf
 import torch
 
-sys.path.insert(0, "/root/qwen_tts_megakernel")
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from qwen_tts_megakernel.engine import MegakernelTTS
 
 TEXTS = [

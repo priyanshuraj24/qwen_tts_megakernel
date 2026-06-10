@@ -115,7 +115,9 @@ python3 tests/bench.py         # tok/s, component costs, TTFC, RTF
 
 Note: in this container the stock `torchaudio` wheel is ABI-incompatible with the
 NVIDIA torch build; a stub satisfying `qwen_tts`'s unused 25Hz-tokenizer import is
-installed instead (the 12Hz path never calls it).
+installed instead (the 12Hz path never calls it). If anything fails to start with
+`OSError: libtorchaudio.abi3.so: undefined symbol: ...`, a pip install has pulled
+the real torchaudio back in — run `bash scripts/fix_torchaudio_stub.sh` to fix.
 
 ## Honest limitations / next steps
 

@@ -2,11 +2,19 @@
 # Versions pinned to what was tested on the RTX 5090 box (2026-06).
 #
 # NOT listed here on purpose:
-#   - torch: use the NVIDIA PyTorch container's build (needs sm_120/Blackwell
-#     support; tested with 2.10.0a0+nv26.1). Do NOT `pip install torch` over it.
 #   - torchaudio: must stay as the stub — stock wheels are ABI-incompatible
-#     with the container's torch. If any install below pulls torchaudio in,
+#     with this torch build. If any install below pulls torchaudio in,
 #     run `bash scripts/fix_torchaudio_stub.sh` afterwards (see SETUP.md).
+#   - torchvision: do NOT install. Nothing here uses it, but if present and
+#     built against a different CUDA than torch, transformers auto-imports it
+#     and `AutoProcessor` breaks. The fix script removes a mismatched one.
+
+# Stock PyPI torch works on the RTX 5090 (the cu128 wheel ships sm_120).
+# Pinned because the container's prerelease build (2.10.0a0+nv26.1) does NOT
+# satisfy pip's resolver — on 2026-06-10 `pip install -r requirements.txt`
+# silently replaced it with this stock wheel, which was then verified to run
+# the megakernel at full speed. Pinning makes that explicit and repeatable.
+torch==2.10.0
 
 qwen-tts==0.1.1          # official Qwen3-TTS package (model, codec, prompts)
 soundfile==0.13.1        # wav read/write in tests and CLI

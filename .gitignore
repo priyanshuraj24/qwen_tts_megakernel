@@ -1,1 +1,16 @@
+# Python
+__pycache__/
+*.pyc
+*.egg-info/
+
+# Generated voice library (web app output)
 voices/
+
+# Any new audio output — the demo samples already in the repo stay tracked
+# (gitignore does not affect already-tracked files), but new generations
+# should not sneak into commits.
+*.wav
+
+# Misc
+nohup.out
+.cache/

@@ -95,8 +95,8 @@ text ─ qwen_tts prompt build ─► HF prefill (1 forward) ──► KV → ke
 ## Run
 
 ```bash
-# requires: RTX 5090 (sm_120), CUDA 12.8+, torch with sm_120 support,
-# pip install qwen-tts soundfile
+# requires: RTX 5090 (sm_120), CUDA 12.8+, torch with sm_120 support
+# pip install -r requirements.txt && bash scripts/fix_torchaudio_stub.sh
 python3 synthesize.py "Hello from the megakernel." --speaker ryan --out hello.wav
 
 # streaming API

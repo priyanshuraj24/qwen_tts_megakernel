@@ -1,7 +1,9 @@
 # Reproducing the environment on a fresh RTX 5090 box
 
 1. Base: NVIDIA PyTorch container (torch with sm_120 support), CUDA 12.8+.
-2. `pip install qwen-tts soundfile`  (pulls transformers, accelerate, etc.)
+2. `pip install -r requirements.txt && bash scripts/fix_torchaudio_stub.sh`
+   (the fix script is mandatory: qwen-tts itself depends on torchaudio, so
+   every install of it pulls in the broken stock wheel — see step 3)
 3. torchaudio gotcha: if the container's torch is a custom NVIDIA build, stock
    torchaudio wheels fail at import with
    `OSError: libtorchaudio.abi3.so: undefined symbol: torch_dtype_float4_e2m1fn_x2`
